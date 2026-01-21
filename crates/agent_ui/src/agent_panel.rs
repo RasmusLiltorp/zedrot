@@ -445,6 +445,9 @@ pub struct AgentPanel {
     onboarding: Entity<AgentPanelOnboarding>,
     selected_agent: AgentType,
     show_trust_workspace_message: bool,
+    webview_manager: Option<crate::webview_manager::WebViewManager>,
+    webview_current_url: String,
+    webview_url_editor: Entity<Editor>,
 }
 
 impl AgentPanel {
@@ -698,6 +701,13 @@ impl AgentPanel {
             selected_agent: AgentType::default(),
             loading: false,
             show_trust_workspace_message: false,
+            webview_manager: None,
+            webview_current_url: "https://www.tiktok.com".into(),
+            webview_url_editor: cx.new(|cx| {
+                let mut editor = Editor::single_line(window, cx);
+                editor.set_placeholder_text("Enter URL...", window, cx);
+                editor
+            }),
         };
 
         // Initial sync of agent servers from extensions
@@ -1653,7 +1663,19 @@ impl Panel for AgentPanel {
         cx.notify();
     }
 
-    fn set_active(&mut self, _active: bool, _window: &mut Window, _cx: &mut Context<Self>) {}
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if active {
+            if let Some(manager) = &self.webview_manager {
+                manager.set_hidden(false);
+            }
+        } else {
+            if let Some(manager) = &self.webview_manager {
+                manager.set_hidden(true);
+            }
+        }
+
+        cx.notify();
+    }
 
     fn remote_id() -> Option<proto::PanelId> {
         Some(proto::PanelId::AssistantPanel)
@@ -2005,6 +2027,107 @@ impl AgentPanel {
                     menu.clone()
                 }
             })
+    }
+
+    fn render_webview_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        use ui::*;
+
+        let url_editor = self.webview_url_editor.clone();
+        let panel_width: f32 = self.width.unwrap_or(px(400.0)).into();
+        let show_url_bar = panel_width >= 500.0;
+
+        h_flex()
+            .w_full()
+            .p_2()
+            .gap_2()
+            .bg(cx.theme().colors().editor_background)
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .child(
+                Button::new("tiktok", "TikTok")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.webview_navigate_to("https://www.tiktok.com".into(), window, cx);
+                    }))
+            )
+            .child(
+                Button::new("youtube", "YouTube")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.webview_navigate_to("https://www.youtube.com".into(), window, cx);
+                    }))
+            )
+            .child(
+                Button::new("instagram", "Instagram")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.webview_navigate_to("https://www.instagram.com".into(), window, cx);
+                    }))
+            )
+            .when(show_url_bar, |element| {
+                element
+                    .child(div().flex_1())
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .w(px(200.0))
+                                    .h(px(24.0))
+                                    .px_2()
+                                    .bg(cx.theme().colors().editor_background)
+                                    .border_1()
+                                    .border_color(cx.theme().colors().border)
+                                    .rounded_md()
+                                    .child(url_editor)
+                            )
+                            .child(
+                                Button::new("go", "Go")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let url = this.webview_url_editor.read(cx).text(cx).to_string();
+                                        if !url.is_empty() {
+                                            let url = if url.starts_with("http://") || url.starts_with("https://") {
+                                                url
+                                            } else {
+                                                format!("https://{}", url)
+                                            };
+                                            this.webview_navigate_to(url, window, cx);
+                                        }
+                                    }))
+                            )
+                    )
+            })
+    }
+
+    fn webview_navigate_to(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.webview_current_url = url.clone();
+
+        let needs_new_webview = match &self.webview_manager {
+            None => true,
+            Some(manager) => !manager.is_visible(),
+        };
+
+        if needs_new_webview {
+            self.webview_manager = None;
+
+            let width = self.width.unwrap_or(px(400.0));
+            let height = px(600.0);
+            let bounds = gpui::Bounds {
+                origin: gpui::Point { x: px(0.0), y: px(0.0) },
+                size: gpui::Size { width, height },
+            };
+            let ns_window = window.native_window_handle().unwrap_or(std::ptr::null_mut());
+            match crate::webview_manager::WebViewManager::new(ns_window, bounds, &url) {
+                Ok(manager) => {
+                    self.webview_manager = Some(manager);
+                    log::info!("Created webview for: {}", url);
+                }
+                Err(e) => {
+                    log::error!("Failed to create webview: {}", e);
+                }
+            }
+        } else if let Some(manager) = &mut self.webview_manager {
+            manager.navigate(&url);
+        }
+
+        cx.notify();
     }
 
     fn render_toolbar_back_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2814,6 +2937,7 @@ impl Render for AgentPanel {
                 }
             }))
             .child(self.render_toolbar(window, cx))
+            .child(self.render_webview_nav(cx))
             .children(self.render_workspace_trust_message(cx))
             .children(self.render_onboarding(window, cx))
             .map(|parent| match &self.active_view {

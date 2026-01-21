@@ -21,6 +21,7 @@ mod terminal_inline_assistant;
 mod text_thread_editor;
 mod text_thread_history;
 mod ui;
+mod webview_manager;
 
 use std::rc::Rc;
 use std::sync::Arc;

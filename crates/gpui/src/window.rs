@@ -2029,6 +2029,24 @@ impl Window {
         self.scale_factor
     }
 
+    /// Get the native window handle for embedding native views (macOS only).
+    /// Returns a pointer to the underlying NSView on macOS, or None on other platforms.
+    #[cfg(target_os = "macos")]
+    pub fn native_window_handle(&self) -> Option<*mut std::ffi::c_void> {
+        use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+
+        match self.platform_window.raw_window_handle() {
+            Ok(RawWindowHandle::AppKit(handle)) => Some(handle.ns_view.as_ptr()),
+            _ => None,
+        }
+    }
+
+    /// Get the native window handle for embedding native views (not supported on this platform).
+    #[cfg(not(target_os = "macos"))]
+    pub fn native_window_handle(&self) -> Option<*mut std::ffi::c_void> {
+        None
+    }
+
     /// The size of an em for the base font of the application. Adjusting this value allows the
     /// UI to scale, just like zooming a web page.
     pub fn rem_size(&self) -> Pixels {
